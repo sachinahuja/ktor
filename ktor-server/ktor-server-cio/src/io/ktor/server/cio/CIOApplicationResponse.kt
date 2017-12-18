@@ -82,16 +82,19 @@ class CIOApplicationResponse(call: CIOApplicationCall,
 
     private fun hasHeader(name: String) = headersNames.any { it.equals(name, ignoreCase = true) }
 
-    suspend override fun responseChannel(): ByteWriteChannel {
-        sendResponseMessage(true, -1, false)
+    suspend override fun responseChannel(length: Long?): ByteWriteChannel {
+        val chunked = (length == null)
+        sendResponseMessage(chunked, length ?: -1, false)
+
+        if (!chunked) return output
 
         val j = encodeChunked(output, engineDispatcher)
-        val chunked = j.channel
+        val chunkedOutput = j.channel
 
-        chunkedChannel = chunked
+        chunkedChannel = chunkedOutput
         chunkedJob = j
 
-        return chunked
+        return chunkedOutput
     }
 
     suspend override fun respondUpgrade(upgrade: OutgoingContent.ProtocolUpgrade) {
@@ -105,7 +108,7 @@ class CIOApplicationResponse(call: CIOApplicationCall,
     }
 
     suspend override fun respondFromBytes(bytes: ByteArray) {
-        sendResponseMessage(false, bytes.size, true)
+        sendResponseMessage(false, bytes.size.toLong(), true)
         output.writeFully(bytes)
         output.close()
     }
@@ -126,7 +129,7 @@ class CIOApplicationResponse(call: CIOApplicationCall,
         this.statusCode = statusCode
     }
 
-    private suspend fun sendResponseMessage(chunked: Boolean, contentLength: Int, contentReady: Boolean) {
+    private suspend fun sendResponseMessage(chunked: Boolean, contentLength: Long, contentReady: Boolean) {
         val builder = RequestResponseBuilder()
         try  {
             builder.responseLine("HTTP/1.1", statusCode.value, statusCode.description)
@@ -138,7 +141,7 @@ class CIOApplicationResponse(call: CIOApplicationCall,
                     builder.headerLine("Transfer-Encoding", "chunked")
                 }
             }
-            if (contentLength != -1) {
+            if (contentLength != -1L) {
                 if (!hasHeader("Content-Length")) {
                     builder.headerLine("Content-Length", contentLength.toString())
                 }

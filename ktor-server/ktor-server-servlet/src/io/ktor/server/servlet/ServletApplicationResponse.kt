@@ -54,7 +54,7 @@ open class ServletApplicationResponse(call: ServletApplicationCall,
         responseByteChannel.value.channel
     }
 
-    override suspend fun responseChannel(): ByteWriteChannel = responseChannel.value
+    override suspend fun responseChannel(length: Long?): ByteWriteChannel = responseChannel.value
 
     init {
         pipeline.intercept(ApplicationSendPipeline.Engine) {

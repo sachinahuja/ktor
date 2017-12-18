@@ -1,6 +1,5 @@
 package io.ktor.server.netty
 
-import io.ktor.cio.*
 import io.ktor.content.*
 import io.ktor.http.*
 import io.ktor.http.HttpHeaders
@@ -54,15 +53,15 @@ internal abstract class NettyApplicationResponse(call: NettyApplicationCall,
         sendResponse(chunked = false, content = ByteReadChannel(bytes))
     }
 
-    override suspend fun responseChannel(): ByteWriteChannel {
+    override suspend fun responseChannel(length: Long?): ByteWriteChannel {
         val channel = ByteChannel()
-        sendResponse(content = channel)
+        sendResponse(length == null, content = channel)
         return channel
     }
 
     protected abstract fun responseMessage(chunked: Boolean, last: Boolean): Any
 
-    protected final fun sendResponse(chunked: Boolean = true, content: ByteReadChannel) {
+    protected fun sendResponse(chunked: Boolean = true, content: ByteReadChannel) {
         if (!responseMessageSent) {
             responseChannel = content
             responseMessage.complete(responseMessage(chunked, content.isClosedForRead))

@@ -2,6 +2,7 @@ package io.ktor.server.testing
 
 import io.ktor.application.*
 import io.ktor.cio.*
+import io.ktor.client.call.*
 import io.ktor.client.request.*
 import io.ktor.client.response.*
 import io.ktor.content.*
@@ -1292,6 +1293,79 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
 
                 assertEquals(-1, ch.readAvailable(ByteArray(1)))
             }
+        }
+    }
+
+    @Test
+    @NoHttp2
+    open fun testChunked() {
+        createAndStartServer {
+            get("/chunked") {
+                call.respond(object : OutgoingContent.WriteChannelContent() {
+                    suspend override fun writeTo(channel: ByteWriteChannel) {
+                        channel.writeStringUtf8("Hello")
+                        channel.close()
+                    }
+                })
+            }
+            get("/pseudo-chunked") {
+                call.respond(object : OutgoingContent.WriteChannelContent() {
+                    override val headers: ValuesMap get() = ValuesMap.build(true) {
+                            append(HttpHeaders.ContentLength, "Hello".toByteArray().size.toString())
+                        }
+
+                    suspend override fun writeTo(channel: ByteWriteChannel) {
+                        channel.writeStringUtf8("Hello")
+                        channel.close()
+                    }
+                })
+            }
+            get("/array") {
+                call.respond(object : OutgoingContent.ByteArrayContent() {
+                    override fun bytes(): ByteArray = "Hello".toByteArray()
+                })
+            }
+            get("/read-channel") {
+                call.respond(object : OutgoingContent.ReadChannelContent() {
+                    override fun readFrom(): ByteReadChannel = ByteReadChannel("Hello".toByteArray())
+                })
+            }
+            get("/fixed-read-channel") {
+                call.respond(object : OutgoingContent.ReadChannelContent() {
+                    override val headers: ValuesMap get() = ValuesMap.build(true) {
+                        append(HttpHeaders.ContentLength, "Hello".toByteArray().size.toString())
+                    }
+
+                    override fun readFrom(): ByteReadChannel = ByteReadChannel("Hello".toByteArray())
+                })
+            }
+        }
+
+        withUrl("/array") {
+            assertNotEquals("chunked", headers[HttpHeaders.TransferEncoding])
+            assertEquals("Hello", call.receive())
+        }
+
+        withUrl("/chunked") {
+            assertEquals("chunked", headers[HttpHeaders.TransferEncoding])
+            assertEquals("Hello", call.receive())
+            assertNull(headers[HttpHeaders.ContentLength])
+        }
+
+        withUrl("/fixed-read-channel") {
+            assertNotEquals("chunked", headers[HttpHeaders.TransferEncoding])
+            assertEquals("Hello", call.receive())
+        }
+
+        withUrl("/pseudo-chunked") {
+            assertNotEquals("chunked", headers[HttpHeaders.TransferEncoding])
+            assertEquals("Hello", call.receive())
+        }
+
+        withUrl("/read-channel") {
+            assertNull(headers[HttpHeaders.ContentLength])
+            assertEquals("chunked", headers[HttpHeaders.TransferEncoding])
+            assertEquals("Hello", call.receive())
         }
     }
 
