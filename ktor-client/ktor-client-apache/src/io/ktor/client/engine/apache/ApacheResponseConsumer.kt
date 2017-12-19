@@ -43,7 +43,13 @@ internal class ApacheResponseConsumer(
     override fun buildResult(context: HttpContext) = Unit
 
     override fun onContentReceived(decoder: ContentDecoder, ioctrl: IOControl) {
-        val read = decoder.read(current)
+        val read = try {
+            decoder.read(current)
+        } catch (cause: Throwable) {
+            backendChannel.close(cause)
+            return
+        }
+
         if (read <= 0 || current.hasRemaining()) return
 
         current.flip()
@@ -76,16 +82,11 @@ internal class ApacheResponseConsumer(
             channel.writeRemaining()
         } catch (cause: Throwable) {
             channel.close(cause)
-            throw cause
+            parent.completeExceptionally(cause)
         } finally {
             channel.close()
-            HttpClientDefaultPool.recycle(current)
-        }
-    }.invokeOnCompletion { cause ->
-        if (cause != null) {
-            parent.completeExceptionally(cause)
-        } else {
             parent.complete(Unit)
+            HttpClientDefaultPool.recycle(current)
         }
     }
 

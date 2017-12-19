@@ -104,7 +104,18 @@ abstract class BaseApplicationResponse(override val call: ApplicationCall) : App
         // Retrieve response channel, that might send out headers, so it should go after commitHeaders
         responseChannel(length).use {
             // Call user code to send data
+            val before = totalBytesWritten
             content.writeTo(this)
+
+            length ?: return@use
+            val written = totalBytesWritten - before
+            if (written > length) {
+                throw BodyLengthIsTooLong(length)
+            }
+
+            if (written < length) {
+                throw BodyLengthIsTooSmall(length, written)
+            }
         }
     }
 
@@ -115,11 +126,23 @@ abstract class BaseApplicationResponse(override val call: ApplicationCall) : App
     }
 
     protected open suspend fun respondFromChannel(readChannel: ByteReadChannel, length: Long?) {
-        readChannel.copyAndClose(responseChannel(length))
+        val output = responseChannel(length)
+        val limit = length ?: Long.MAX_VALUE
+        val copied = readChannel.copyAndClose(output, limit)
+
+        length ?: return
+
+        if (readChannel.discard(max = 1) > 0) {
+            throw BodyLengthIsTooLong(length)
+        }
+
+        if (copied < length) {
+            throw BodyLengthIsTooSmall(length, copied)
+        }
     }
 
     protected abstract suspend fun respondUpgrade(upgrade: OutgoingContent.ProtocolUpgrade)
-    protected abstract suspend fun responseChannel(length: Long? = null): ByteWriteChannel
+    protected abstract suspend fun responseChannel(length: Long?): ByteWriteChannel
     protected open val bufferPool: ByteBufferPool get() = NoPool
 
     protected abstract fun setStatus(statusCode: HttpStatusCode)
@@ -129,4 +152,12 @@ abstract class BaseApplicationResponse(override val call: ApplicationCall) : App
     }
 
     class ResponseAlreadySentException : IllegalStateException("Response has already been sent")
+
+    class BodyLengthIsTooSmall(expected: Long, actual: Long) : IllegalStateException(
+            "Body.size is too small. Body: $actual, Content-Length: $expected"
+    )
+
+    class BodyLengthIsTooLong(expected: Long) : IllegalStateException(
+            "Body.size is too long. Expected $expected"
+    )
 }

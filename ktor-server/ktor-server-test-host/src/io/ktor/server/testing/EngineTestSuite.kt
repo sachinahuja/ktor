@@ -17,6 +17,7 @@ import io.ktor.util.*
 import kotlinx.coroutines.experimental.*
 import kotlinx.coroutines.experimental.io.*
 import kotlinx.io.streams.*
+import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runners.model.*
 import org.slf4j.*
@@ -221,7 +222,6 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
             assertEquals(HttpStatusCode.MovedPermanently.value, status.value)
         }
     }
-
 
     @Test
     fun testRedirectFromInterceptor() {
@@ -979,7 +979,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
                             val firstByte = reader.read()
                             if (firstByte == -1) {
                                 //println("Premature end of response stream at iteration $i")
-                                fail("Premature end of response stream at iteration $i")
+                                kotlin.test.fail("Premature end of response stream at iteration $i")
                             } else {
                                 assertEquals('O', firstByte.toChar())
                                 Thread.sleep(random.nextInt(1000).toLong())
@@ -1299,73 +1299,170 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
     @Test
     @NoHttp2
     open fun testChunked() {
+        val data = ByteArray(16 * 1024, { it.toByte() })
+        val size = data.size.toString()
+
         createAndStartServer {
             get("/chunked") {
                 call.respond(object : OutgoingContent.WriteChannelContent() {
                     suspend override fun writeTo(channel: ByteWriteChannel) {
-                        channel.writeStringUtf8("Hello")
+                        channel.writeFully(data)
                         channel.close()
                     }
                 })
             }
             get("/pseudo-chunked") {
                 call.respond(object : OutgoingContent.WriteChannelContent() {
-                    override val headers: ValuesMap get() = ValuesMap.build(true) {
-                            append(HttpHeaders.ContentLength, "Hello".toByteArray().size.toString())
+                    override val headers: ValuesMap
+                        get() {
+                            return ValuesMap.build(true) {
+                                append(HttpHeaders.ContentLength, size)
+                            }
                         }
 
                     suspend override fun writeTo(channel: ByteWriteChannel) {
-                        channel.writeStringUtf8("Hello")
+                        channel.writeFully(data)
                         channel.close()
                     }
                 })
             }
             get("/array") {
                 call.respond(object : OutgoingContent.ByteArrayContent() {
-                    override fun bytes(): ByteArray = "Hello".toByteArray()
+                    override fun bytes(): ByteArray = data
                 })
             }
             get("/read-channel") {
                 call.respond(object : OutgoingContent.ReadChannelContent() {
-                    override fun readFrom(): ByteReadChannel = ByteReadChannel("Hello".toByteArray())
+                    override fun readFrom(): ByteReadChannel = ByteReadChannel(data)
                 })
             }
             get("/fixed-read-channel") {
                 call.respond(object : OutgoingContent.ReadChannelContent() {
-                    override val headers: ValuesMap get() = ValuesMap.build(true) {
-                        append(HttpHeaders.ContentLength, "Hello".toByteArray().size.toString())
-                    }
+                    override val headers: ValuesMap
+                        get() = ValuesMap.build(true) {
+                            append(HttpHeaders.ContentLength, size)
+                        }
 
-                    override fun readFrom(): ByteReadChannel = ByteReadChannel("Hello".toByteArray())
+                    override fun readFrom(): ByteReadChannel = ByteReadChannel(data)
                 })
             }
         }
 
         withUrl("/array") {
             assertNotEquals("chunked", headers[HttpHeaders.TransferEncoding])
-            assertEquals("Hello", call.receive())
+            assertArrayEquals(data, call.response.readBytes())
         }
 
         withUrl("/chunked") {
             assertEquals("chunked", headers[HttpHeaders.TransferEncoding])
-            assertEquals("Hello", call.receive())
+            assertArrayEquals(data, call.response.readBytes())
             assertNull(headers[HttpHeaders.ContentLength])
         }
 
         withUrl("/fixed-read-channel") {
             assertNotEquals("chunked", headers[HttpHeaders.TransferEncoding])
-            assertEquals("Hello", call.receive())
+            assertArrayEquals(data, call.response.readBytes())
         }
 
         withUrl("/pseudo-chunked") {
             assertNotEquals("chunked", headers[HttpHeaders.TransferEncoding])
-            assertEquals("Hello", call.receive())
+            assertArrayEquals(data, call.response.readBytes())
         }
 
         withUrl("/read-channel") {
             assertNull(headers[HttpHeaders.ContentLength])
             assertEquals("chunked", headers[HttpHeaders.TransferEncoding])
-            assertEquals("Hello", call.receive())
+            assertArrayEquals(data, call.response.readBytes())
+        }
+    }
+
+    @Test
+    @NoHttp2
+    @Ignore
+    open fun testChunkedWrongLength() {
+        val data = ByteArray(16 * 1024, { it.toByte() })
+        val doubleSize = (data.size * 2).toString()
+        val halfSize = (data.size / 2).toString()
+
+        createAndStartServer {
+            get("/read-less") {
+                assertFailsSuspend {
+                    call.respond(object : OutgoingContent.ReadChannelContent() {
+                        override val headers: ValuesMap
+                            get() = ValuesMap.build(true) {
+                                append(HttpHeaders.ContentLength, doubleSize)
+                            }
+
+                        override fun readFrom(): ByteReadChannel = ByteReadChannel(data)
+                    })
+                }
+            }
+            get("/read-more") {
+                assertFailsSuspend {
+                    call.respond(object : OutgoingContent.ReadChannelContent() {
+                        override val headers: ValuesMap
+                            get() = ValuesMap.build(true) {
+                                append(HttpHeaders.ContentLength, halfSize)
+                            }
+
+                        override fun readFrom(): ByteReadChannel = ByteReadChannel(data)
+                    })
+                }
+            }
+            get("/write-less") {
+                assertFailsSuspend {
+                    call.respond(object : OutgoingContent.WriteChannelContent() {
+                        override val headers: ValuesMap
+                            get() = ValuesMap.build(true) {
+                                append(HttpHeaders.ContentLength, doubleSize)
+                            }
+
+                        suspend override fun writeTo(channel: ByteWriteChannel) {
+                            channel.writeFully(data)
+                            channel.close()
+                        }
+                    })
+                }
+            }
+            get("/write-more") {
+                assertFailsSuspend {
+                    call.respond(object : OutgoingContent.WriteChannelContent() {
+                        override val headers: ValuesMap
+                            get() = ValuesMap.build(true) {
+                                append(HttpHeaders.ContentLength, halfSize)
+                            }
+
+                        suspend override fun writeTo(channel: ByteWriteChannel) {
+                            channel.writeFully(data)
+                            channel.close()
+                        }
+                    })
+                }
+            }
+        }
+
+        assertFails {
+            withUrl("/read-more") {
+                call.receive<String>()
+            }
+        }
+
+        assertFails {
+            withUrl("/write-more") {
+                call.receive<String>()
+            }
+        }
+
+        assertFails {
+            withUrl("/read-less") {
+                call.receive<String>()
+            }
+        }
+
+        assertFails {
+            withUrl("/write-less") {
+                call.receive<String>()
+            }
         }
     }
 

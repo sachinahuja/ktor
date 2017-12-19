@@ -84,7 +84,7 @@ class CIOApplicationResponse(call: CIOApplicationCall,
 
     suspend override fun responseChannel(length: Long?): ByteWriteChannel {
         val chunked = (length == null)
-        sendResponseMessage(chunked, length ?: -1, false)
+        sendResponseMessage(chunked, length ?: -1L, false)
 
         if (!chunked) return output
 
