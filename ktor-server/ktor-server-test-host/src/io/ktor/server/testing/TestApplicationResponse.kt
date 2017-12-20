@@ -61,7 +61,7 @@ class TestApplicationResponse(call: TestApplicationCall) : BaseApplicationRespon
         }
     }
 
-    override suspend fun responseChannel(length: Long?): ByteWriteChannel = realContent.value.apply {
+    override suspend fun responseChannel(): ByteWriteChannel = realContent.value.apply {
         headers[HttpHeaders.ContentLength]?.let { contentLengthString ->
             val contentLength = contentLengthString.toLong()
             if (contentLength >= Int.MAX_VALUE) {

@@ -46,8 +46,8 @@ abstract class BaseApplicationResponse(override val call: ApplicationCall) : App
             }
         }
 
-        if (content is OutgoingContent.ByteArrayContent && content.headers[HttpHeaders.ContentLength] == null) {
-            header(HttpHeaders.ContentLength, content.bytes().size)
+        if (content.headers[HttpHeaders.ContentLength] == null && content.headers[HttpHeaders.TransferEncoding] == null) {
+            header(HttpHeaders.TransferEncoding, "chunked")
         }
 
         val connection = call.request.headers["Connection"]
@@ -81,7 +81,7 @@ abstract class BaseApplicationResponse(override val call: ApplicationCall) : App
                 // First set headers
                 commitHeaders(content)
                 // need to be in external function to keep tail suspend call
-                return respondWriteChannelContent(content, length)
+                return respondWriteChannelContent(content)
             }
 
         // Pipe is least efficient
@@ -90,7 +90,7 @@ abstract class BaseApplicationResponse(override val call: ApplicationCall) : App
                 val readChannel = content.readFrom()
                 // If channel is fine, commit headers and pipe data
                 commitHeaders(content)
-                return respondFromChannel(readChannel, length)
+                return respondFromChannel(readChannel)
             }
 
         // Do nothing, but maintain `when` exhaustiveness
@@ -100,49 +100,48 @@ abstract class BaseApplicationResponse(override val call: ApplicationCall) : App
         }
     }
 
-    protected open suspend fun respondWriteChannelContent(content: OutgoingContent.WriteChannelContent, length: Long?) {
+    protected open suspend fun respondWriteChannelContent(content: OutgoingContent.WriteChannelContent) {
         // Retrieve response channel, that might send out headers, so it should go after commitHeaders
-        responseChannel(length).use {
+        responseChannel().use {
             // Call user code to send data
             val before = totalBytesWritten
             content.writeTo(this)
 
-            length ?: return@use
-            val written = totalBytesWritten - before
-            if (written > length) {
-                throw BodyLengthIsTooLong(length)
-            }
-
-            if (written < length) {
-                throw BodyLengthIsTooSmall(length, written)
+            headers[HttpHeaders.ContentLength]?.toLong()?.let { length ->
+                val written = totalBytesWritten - before
+                ensureLength(length, written)
             }
         }
     }
 
     protected open suspend fun respondFromBytes(bytes: ByteArray) {
-        responseChannel(bytes.size.toLong()).use {
+        headers[HttpHeaders.ContentLength]?.toLong()?.let { length ->
+            ensureLength(length, bytes.size.toLong())
+        }
+
+        responseChannel().use {
             writeFully(bytes)
         }
     }
 
-    protected open suspend fun respondFromChannel(readChannel: ByteReadChannel, length: Long?) {
-        val output = responseChannel(length)
-        val limit = length ?: Long.MAX_VALUE
-        val copied = readChannel.copyAndClose(output, limit)
+    protected open suspend fun respondFromChannel(readChannel: ByteReadChannel) {
+        responseChannel().use {
+            val length = headers[HttpHeaders.ContentLength]?.toLong()
+            val copied = readChannel.copyAndClose(this, length ?: Long.MAX_VALUE)
 
-        length ?: return
-
-        if (readChannel.discard(max = 1) > 0) {
-            throw BodyLengthIsTooLong(length)
-        }
-
-        if (copied < length) {
-            throw BodyLengthIsTooSmall(length, copied)
+            length ?: return@use
+            val discarded = readChannel.discard(max = 1)
+            ensureLength(length, copied + discarded)
         }
     }
 
+    private fun ensureLength(expected: Long, actual: Long) {
+        if (expected < actual) throw BodyLengthIsTooLong(expected)
+        if (expected > actual) throw BodyLengthIsTooSmall(expected, actual)
+    }
+
     protected abstract suspend fun respondUpgrade(upgrade: OutgoingContent.ProtocolUpgrade)
-    protected abstract suspend fun responseChannel(length: Long?): ByteWriteChannel
+    protected abstract suspend fun responseChannel(): ByteWriteChannel
     protected open val bufferPool: ByteBufferPool get() = NoPool
 
     protected abstract fun setStatus(statusCode: HttpStatusCode)

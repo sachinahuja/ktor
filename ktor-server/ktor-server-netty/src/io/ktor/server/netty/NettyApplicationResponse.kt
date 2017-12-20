@@ -50,12 +50,13 @@ internal abstract class NettyApplicationResponse(call: NettyApplicationCall,
     suspend override fun respondFromBytes(bytes: ByteArray) {
         // Note that it shouldn't set HttpHeaders.ContentLength even if we know it here,
         // because it should've been set by commitHeaders earlier
-        sendResponse(chunked = false, content = ByteReadChannel(bytes))
+        sendResponse(chunked = headers[HttpHeaders.TransferEncoding] == "chunked", content = ByteReadChannel(bytes))
     }
 
-    override suspend fun responseChannel(length: Long?): ByteWriteChannel {
+    override suspend fun responseChannel(): ByteWriteChannel {
         val channel = ByteChannel()
-        sendResponse(length == null, content = channel)
+        val chunked = headers[HttpHeaders.TransferEncoding] == "chunked"
+        sendResponse(chunked, content = channel)
         return channel
     }
 

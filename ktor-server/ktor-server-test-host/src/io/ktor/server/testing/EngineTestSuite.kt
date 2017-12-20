@@ -1314,10 +1314,8 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
             get("/pseudo-chunked") {
                 call.respond(object : OutgoingContent.WriteChannelContent() {
                     override val headers: ValuesMap
-                        get() {
-                            return ValuesMap.build(true) {
-                                append(HttpHeaders.ContentLength, size)
-                            }
+                        get() = ValuesMap.build(true) {
+                            append(HttpHeaders.ContentLength, size)
                         }
 
                     suspend override fun writeTo(channel: ByteWriteChannel) {
@@ -1327,6 +1325,16 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
                 })
             }
             get("/array") {
+                call.respond(object : OutgoingContent.ByteArrayContent() {
+                    override val headers: ValuesMap
+                        get() = ValuesMap.build(true) {
+                            append(HttpHeaders.ContentLength, size)
+                        }
+
+                    override fun bytes(): ByteArray = data
+                })
+            }
+            get("/array-chunked") {
                 call.respond(object : OutgoingContent.ByteArrayContent() {
                     override fun bytes(): ByteArray = data
                 })
@@ -1350,6 +1358,11 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
 
         withUrl("/array") {
             assertNotEquals("chunked", headers[HttpHeaders.TransferEncoding])
+            assertArrayEquals(data, call.response.readBytes())
+        }
+
+        withUrl("/array-chunked") {
+            assertEquals("chunked", headers[HttpHeaders.TransferEncoding])
             assertArrayEquals(data, call.response.readBytes())
         }
 
