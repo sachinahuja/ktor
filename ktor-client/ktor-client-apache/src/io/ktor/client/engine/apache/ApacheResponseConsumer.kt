@@ -28,7 +28,7 @@ internal class ApacheResponseConsumer(
     private val backendChannel = Channel<ApacheResponseChunk>(Channel.UNLIMITED)
     private var current: ByteBuffer = HttpClientDefaultPool.borrow()
     private val lock = ReentrantLock()
-    private var channelSize: Int = 0
+    private var channelSize = 0
 
     init {
         runResponseProcessing()
@@ -43,7 +43,13 @@ internal class ApacheResponseConsumer(
     override fun buildResult(context: HttpContext) = Unit
 
     override fun onContentReceived(decoder: ContentDecoder, ioctrl: IOControl) {
-        val read = decoder.read(current)
+        val read = try {
+            decoder.read(current)
+        } catch (cause: Throwable) {
+            backendChannel.close(cause)
+            return
+        }
+
         if (read <= 0 || current.hasRemaining()) return
 
         current.flip()
@@ -53,14 +59,14 @@ internal class ApacheResponseConsumer(
 
         current = HttpClientDefaultPool.borrow()
         lock.withLock {
-            ++channelSize
+            channelSize++
             if (channelSize == MAX_QUEUE_LENGTH) ioctrl.suspendInput()
         }
     }
 
     override fun onEntityEnclosed(entity: HttpEntity, contentType: ContentType) {}
 
-    private fun runResponseProcessing() = launch(dispatcher, parent = parent) {
+    private fun runResponseProcessing() = launch(dispatcher) {
         try {
             while (!backendChannel.isClosedForReceive) {
                 val (buffer, io) = backendChannel.receiveOrNull() ?: break
@@ -76,16 +82,11 @@ internal class ApacheResponseConsumer(
             channel.writeRemaining()
         } catch (cause: Throwable) {
             channel.close(cause)
-            throw cause
+            parent.completeExceptionally(cause)
         } finally {
             channel.close()
-            HttpClientDefaultPool.recycle(current)
-        }
-    }.invokeOnCompletion { cause ->
-        if (cause != null) {
-            parent.completeExceptionally(cause)
-        } else {
             parent.complete(Unit)
+            HttpClientDefaultPool.recycle(current)
         }
     }
 
