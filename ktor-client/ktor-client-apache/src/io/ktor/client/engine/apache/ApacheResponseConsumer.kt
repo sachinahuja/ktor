@@ -9,15 +9,11 @@ import org.apache.http.entity.*
 import org.apache.http.nio.*
 import org.apache.http.nio.protocol.*
 import org.apache.http.protocol.*
-import java.io.*
 import java.nio.ByteBuffer
-import java.util.concurrent.locks.*
-import kotlin.concurrent.*
 import kotlin.coroutines.experimental.*
 
-private val MAX_QUEUE_LENGTH: Int = 65 * 1024 / DEFAULT_HTTP_BUFFER_SIZE
 
-private data class ApacheResponseChunk(val buffer: ByteBuffer, val io: IOControl?)
+private val MAX_QUEUE_LENGTH: Int = 65 * 1024 / DEFAULT_HTTP_BUFFER_SIZE
 
 internal class ApacheResponseConsumer(
         private val dispatcher: CoroutineContext,
@@ -25,10 +21,8 @@ internal class ApacheResponseConsumer(
         private val block: (HttpResponse, ByteReadChannel) -> Unit
 ) : AbstractAsyncResponseConsumer<Unit>() {
     private val channel = ByteChannel()
-    private val backendChannel = Channel<ApacheResponseChunk>(Channel.UNLIMITED)
+    private val backendChannel = Channel<ByteBuffer>(MAX_QUEUE_LENGTH)
     private var current: ByteBuffer = HttpClientDefaultPool.borrow()
-    private val lock = ReentrantLock()
-    private var channelSize = 0
 
     init {
         runResponseProcessing()
@@ -53,15 +47,20 @@ internal class ApacheResponseConsumer(
         if (read <= 0 || current.hasRemaining()) return
 
         current.flip()
-        if (!backendChannel.offer(ApacheResponseChunk(current, ioctrl))) {
-            throw IOException("backendChannel.offer() failed")
+        if (!backendChannel.offer(current)) {
+            launch(Unconfined) {
+                ioctrl.suspendInput()
+                try {
+                    backendChannel.send(current)
+                } catch (cause: Throwable) {
+                    HttpClientDefaultPool.recycle(current)
+                } finally {
+                    ioctrl.requestInput()
+                }
+            }
         }
 
         current = HttpClientDefaultPool.borrow()
-        lock.withLock {
-            channelSize++
-            if (channelSize == MAX_QUEUE_LENGTH) ioctrl.suspendInput()
-        }
     }
 
     override fun onEntityEnclosed(entity: HttpEntity, contentType: ContentType) {}
@@ -69,12 +68,7 @@ internal class ApacheResponseConsumer(
     private fun runResponseProcessing() = launch(dispatcher) {
         try {
             while (!backendChannel.isClosedForReceive) {
-                val (buffer, io) = backendChannel.receiveOrNull() ?: break
-                lock.withLock {
-                    --channelSize
-                    io?.requestInput()
-                }
-
+                val buffer = backendChannel.receiveOrNull() ?: break
                 channel.writeFully(buffer)
                 HttpClientDefaultPool.recycle(buffer)
             }
