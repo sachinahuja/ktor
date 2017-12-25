@@ -16,7 +16,7 @@ internal fun CharSequence.equalsLowerCase(start: Int = 0, end: Int = length, oth
     if  (end - start != other.length) return false
 
     for (pos in start until end) {
-        if (get(pos).toInt().toLowerCase() != other.get(pos - start).toInt().toLowerCase()) return false
+        if (get(pos).toInt().toLowerCase() != other[pos - start].toInt().toLowerCase()) return false
     }
 
     return true

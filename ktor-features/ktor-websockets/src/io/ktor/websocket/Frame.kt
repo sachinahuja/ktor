@@ -1,7 +1,7 @@
 package io.ktor.websocket
 
-import kotlinx.coroutines.experimental.*
 import io.ktor.util.*
+import kotlinx.coroutines.experimental.*
 import java.nio.*
 
 enum class FrameType (val controlFrame: Boolean, val opcode: Int) {
@@ -80,7 +80,7 @@ fun Frame.Close.readReason(): CloseReason? {
     }
 
     buffer.mark()
-    val code = buffer.getShort()
+    val code = buffer.short
     val message = buffer.decodeString(Charsets.UTF_8)
 
     buffer.reset()

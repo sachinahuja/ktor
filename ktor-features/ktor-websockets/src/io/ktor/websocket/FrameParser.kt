@@ -96,8 +96,8 @@ internal class FrameParser {
     private fun parseLength(bb: ByteBuffer): Boolean {
         if (bb.remaining() >= lengthLength) {
             length = when (lengthLength) {
-                2 -> bb.getShort().toLong() and 0xffff
-                8 -> bb.getLong()
+                2 -> bb.short.toLong() and 0xffff
+                8 -> bb.long
                 else -> throw IllegalStateException()
             }
 
@@ -115,7 +115,7 @@ internal class FrameParser {
 
     private fun parseMaskKey(bb: ByteBuffer): Boolean {
         if (bb.remaining() >= 4) {
-            maskKey = bb.getInt()
+            maskKey = bb.int
 
             state.set(State.BODY)
             return true
